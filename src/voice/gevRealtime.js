@@ -2242,7 +2242,7 @@ function isSecretLikeKey(key) {
   return /(?:api[_-]?key|authorization|bearer|client[_-]?secret|token|secret|password)/i.test(key);
 }
 
-async function captureViewportImage() {
+export async function captureViewportImage({ maxEncodedBytes = VIEWPORT_MAX_ENCODED_BYTES } = {}) {
   const viewer = window.__godsEyeView?.viewer;
   const source = viewer?.scene?.canvas || document.querySelector('#cesiumContainer .cesium-widget canvas');
   if (!source || !source.width || !source.height) return null;
@@ -2271,10 +2271,10 @@ async function captureViewportImage() {
     // Even after the pixel clamp, a busy frame can encode large. If the payload
     // would still overflow the data channel, skip the image rather than let the
     // send throw and strand the turn (M13). The caller falls through without it.
-    if (estimateDataUrlBytes(dataUrl) > VIEWPORT_MAX_ENCODED_BYTES) {
+    if (estimateDataUrlBytes(dataUrl) > maxEncodedBytes) {
       console.warn('[GEV Voice] Skipped oversized viewport capture', {
         bytes: estimateDataUrlBytes(dataUrl),
-        limit: VIEWPORT_MAX_ENCODED_BYTES,
+        limit: maxEncodedBytes,
       });
       return null;
     }
