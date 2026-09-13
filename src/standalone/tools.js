@@ -1,6 +1,10 @@
 import { SceneDirector } from '../scenes/director.js';
 import { initAnnotations } from '../annotations/index.js';
-import { initGevVoiceCommands } from '../voice/gevRealtime.js';
+import {
+  initGevVoiceCommands,
+  captureViewportImage,
+} from '../voice/gevRealtime.js';
+import { jarvisLinkRequested, startJarvisLink } from '../jarvis/link.js';
 import { installScopeMask, destroyScopeMask } from '../scopeMask.js';
 import {
   installRenderGovernor,
@@ -113,5 +117,17 @@ export function createStandaloneTools({
       delete window.__gevVoiceCommands;
   });
   debug.voiceCommands = voiceCommands;
+  // JARVIS mode (?jarvis=1): JARVIS is the voice here, so GEV's own OpenAI mic
+  // and its Space shortcut go away for this page, and the link drives the same
+  // runner the mic would have used.
+  if (jarvisLinkRequested()) {
+    voiceCommands.stop({ removeUi: true });
+    defer(
+      startJarvisLink({
+        runner: voiceCommands.runner,
+        captureViewport: captureViewportImage,
+      }),
+    );
+  }
   return { sceneDirector, annotations, voiceCommands };
 }
