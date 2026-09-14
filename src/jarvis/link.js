@@ -10,6 +10,10 @@
  * The socket is an executor, not a conversation. It answers `run`, `look` and
  * `cancel` and nothing else, so nothing on this page can start a turn on the
  * JARVIS side.
+ *
+ * Embedded (`&embed=<JARVIS origin>`, inside JARVIS's own page), the chip and
+ * GEV's title and style readout step aside for JARVIS's HUD, and the page tells
+ * its parent about keys and activity it would otherwise swallow.
  */
 
 const DEFAULT_BRIDGE_URL = 'ws://localhost:8787/world';
@@ -24,11 +28,29 @@ const REPLACED_CODE = 4000;
  * bridge socket has no such limit, so frames up to this size go through.
  */
 const MAX_FRAME_BYTES = 1_500_000;
+/** Keys JARVIS owns even while the globe has focus: talk, type, layout. */
+const PARENT_KEYS = new Set([' ', 'Enter', 'w']);
+/** Pointer and wheel activity is reported at most this often. */
+const ACTIVITY_THROTTLE_MS = 1500;
 
 /** True when this page was opened as JARVIS's world view. */
 export function jarvisLinkRequested(search = window.location.search) {
   if (new URLSearchParams(search).get('jarvis') === '1') return true;
   return Boolean(import.meta.env?.VITE_JARVIS_BRIDGE_URL);
+}
+
+/**
+ * The JARVIS page embedding this one, as an origin — or null when not
+ * embedded. Messages only ever go to exactly this origin.
+ */
+export function embeddingOrigin(search = window.location.search) {
+  const raw = new URLSearchParams(search).get('embed');
+  if (!raw || window.parent === window) return null;
+  try {
+    return new URL(raw).origin;
+  } catch {
+    return null;
+  }
 }
 
 function bridgeUrl() {
@@ -48,6 +70,75 @@ function serializable(value, action) {
   }
 }
 
+function isEditable(target) {
+  if (!(target instanceof Element)) return false;
+  if (target.closest('input, textarea, select, [contenteditable="true"]')) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Embedded mode. GEV's title block and style readout would sit under JARVIS's
+ * orb and brand, so they step aside. Space, Enter and W are passed up while the
+ * globe has focus — otherwise clicking the map would silently take JARVIS's
+ * talk and type keys away — and pointer or wheel activity is reported so
+ * JARVIS does not pull the view away from someone in the middle of using it.
+ */
+function startEmbedded(parentOrigin) {
+  // A stylesheet rather than element lookups: GEV builds its HUD corners
+  // after startup, and a rule reaches them whenever they appear. JARVIS's orb
+  // and conversation card own the right-hand corners. display rather than
+  // visibility, because the REC dot blinks by setting its own visibility,
+  // which would show through a hidden parent.
+  const style = document.createElement('style');
+  style.textContent =
+    '#title-bar, #style-indicator, .hud-top-right, .hud-bottom-right' +
+    ' { display: none !important; }';
+  document.head.appendChild(style);
+
+  const post = (msg) => {
+    try {
+      window.parent.postMessage({ source: 'gev', ...msg }, parentOrigin);
+    } catch {
+      /* parent gone */
+    }
+  };
+
+  const onKey = (event) => {
+    if (event.metaKey || event.ctrlKey || event.altKey || event.repeat) return;
+    if (!PARENT_KEYS.has(event.key) || isEditable(event.target)) return;
+    // A focused control keeps its own Space and Enter.
+    if (event.target instanceof Element && event.target.closest('button, a')) {
+      return;
+    }
+    event.preventDefault();
+    post({ type: 'key', key: event.key, code: event.code });
+  };
+
+  let lastActivity = 0;
+  const onActivity = () => {
+    const now = Date.now();
+    if (now - lastActivity < ACTIVITY_THROTTLE_MS) return;
+    lastActivity = now;
+    post({ type: 'activity' });
+  };
+
+  window.addEventListener('keydown', onKey, true);
+  window.addEventListener('pointerdown', onActivity, true);
+  window.addEventListener('wheel', onActivity, {
+    capture: true,
+    passive: true,
+  });
+
+  return () => {
+    window.removeEventListener('keydown', onKey, true);
+    window.removeEventListener('pointerdown', onActivity, true);
+    window.removeEventListener('wheel', onActivity, { capture: true });
+    style.remove();
+  };
+}
+
 /**
  * @param {object} options
  * @param {(name: string, args: object, runOptions?: object) => Promise<object>} options.runner
@@ -62,7 +153,10 @@ export function startJarvisLink({ runner, captureViewport }) {
   let retryTimer = null;
   let stopped = false;
   const inFlight = new Map();
-  const chip = createChip();
+  const parentOrigin = embeddingOrigin();
+  // Embedded, JARVIS's own HUD shows the link state, so no chip.
+  const chip = parentOrigin ? null : createChip();
+  const stopEmbedded = parentOrigin ? startEmbedded(parentOrigin) : null;
 
   const send = (msg) => {
     if (socket?.readyState !== WebSocket.OPEN) return false;
@@ -168,7 +262,14 @@ export function startJarvisLink({ runner, captureViewport }) {
     ws.addEventListener('open', () => {
       retryMs = RETRY_MIN_MS;
       setChip(chip, 'online');
-      send({ type: 'hello', app: 'gods-eye-view', protocol: 1 });
+      // `embedded` lets the bridge prefer the globe inside JARVIS's own tab
+      // over a standalone window that also has the link open.
+      send({
+        type: 'hello',
+        app: 'gods-eye-view',
+        protocol: 1,
+        embedded: Boolean(parentOrigin),
+      });
     });
     ws.addEventListener('message', onMessage);
     // An error is always followed by close, so close alone drives the retry.
@@ -202,7 +303,8 @@ export function startJarvisLink({ runner, captureViewport }) {
       /* already closed */
     }
     socket = null;
-    chip.remove();
+    chip?.remove();
+    stopEmbedded?.();
   };
 }
 
@@ -235,6 +337,7 @@ function createChip() {
 }
 
 function setChip(chip, state) {
+  if (!chip) return;
   const { text, color } = CHIP_STATES[state] ?? CHIP_STATES.searching;
   chip.textContent = text;
   chip.style.color = color;
