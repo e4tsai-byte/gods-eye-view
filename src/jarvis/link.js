@@ -113,7 +113,11 @@ function startEmbedded(parentOrigin) {
       return;
     }
     event.preventDefault();
-    post({ type: 'key', key: event.key, code: event.code });
+    post({
+      type: event.type === 'keyup' ? 'keyup' : 'key',
+      key: event.key,
+      code: event.code,
+    });
   };
 
   let lastActivity = 0;
@@ -125,6 +129,9 @@ function startEmbedded(parentOrigin) {
   };
 
   window.addEventListener('keydown', onKey, true);
+  // Releases too: JARVIS is hold-to-talk, so a Space release swallowed here
+  // would leave his microphone open.
+  window.addEventListener('keyup', onKey, true);
   window.addEventListener('pointerdown', onActivity, true);
   window.addEventListener('wheel', onActivity, {
     capture: true,
@@ -133,6 +140,7 @@ function startEmbedded(parentOrigin) {
 
   return () => {
     window.removeEventListener('keydown', onKey, true);
+    window.removeEventListener('keyup', onKey, true);
     window.removeEventListener('pointerdown', onActivity, true);
     window.removeEventListener('wheel', onActivity, { capture: true });
     style.remove();
