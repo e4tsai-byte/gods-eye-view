@@ -58,6 +58,30 @@ test('build helper does not discover environment values or construct local provi
   }
 });
 
+test('frame ancestors admit exactly the named origins and refuse anything malformed', () => {
+  const allowed = createBrowserViteConfig({
+    frameAncestors: 'http://localhost:5180, http://127.0.0.1:5180',
+  }).server.headers;
+  assert.equal(allowed['X-Frame-Options'], undefined);
+  assert.equal(
+    allowed['Content-Security-Policy'],
+    'frame-ancestors http://localhost:5180 http://127.0.0.1:5180',
+  );
+  for (const frameAncestors of [
+    "http://localhost:5180; script-src 'unsafe-inline'",
+    'http://localhost:*',
+    'javascript:alert(1)',
+  ]) {
+    const refused = createBrowserViteConfig({ frameAncestors }).server.headers;
+    assert.equal(refused['X-Frame-Options'], 'DENY', frameAncestors);
+    assert.equal(
+      refused['Content-Security-Policy'],
+      "frame-ancestors 'none'",
+      frameAncestors,
+    );
+  }
+});
+
 test('root config retains existing named exports and standalone provider order', () => {
   for (const [name, value] of Object.entries(providers))
     assert.equal(compatibility[name], value, name);

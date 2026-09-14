@@ -18,5 +18,6 @@ export default defineConfig(({ mode }) => {
     cesiumToken: process.env.CESIUM_ION_TOKEN,
     host: process.env.HOST,
     port: process.env.PORT,
+    frameAncestors: process.env.GEV_FRAME_ANCESTORS,
   });
 });
