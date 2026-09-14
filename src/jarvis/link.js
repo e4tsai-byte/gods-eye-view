@@ -85,16 +85,51 @@ function isEditable(target) {
  * talk and type keys away — and pointer or wheel activity is reported so
  * JARVIS does not pull the view away from someone in the middle of using it.
  */
-function startEmbedded(parentOrigin) {
+function startEmbedded(parentOrigin, setPanelView) {
+  // JARVIS says which view the globe is in: the bare globe in a dashboard
+  // panel, or GEV's full interface on the whole screen.
+  let panel = false;
+  const apply = (want) => {
+    try {
+      setPanelView?.(want);
+    } catch {
+      /* the view stays as it is */
+    }
+  };
+  const onParent = (event) => {
+    if (event.origin !== parentOrigin || event.source !== window.parent) return;
+    const msg = event.data;
+    if (msg?.source !== 'jarvis' || msg.type !== 'layout') return;
+    panel = msg.layout === 'dash';
+    apply(panel);
+  };
+  window.addEventListener('message', onParent);
+
+  // The panel view is held, not just set. GEV's own startup can re-apply its
+  // interface after JARVIS has asked for the bare globe, which left the panel
+  // full of chrome on some boots; while the globe sits in the dash, anything
+  // that takes clean view off puts it straight back.
+  const guard = new MutationObserver(() => {
+    if (panel && !document.body.classList.contains('ui-clean-view')) {
+      apply(true);
+    }
+  });
+  guard.observe(document.body, {
+    attributes: true,
+    attributeFilter: ['class'],
+  });
+
   // A stylesheet rather than element lookups: GEV builds its HUD corners
   // after startup, and a rule reaches them whenever they appear. JARVIS's orb
   // and conversation card own the right-hand corners. display rather than
   // visibility, because the REC dot blinks by setting its own visibility,
-  // which would show through a hidden parent.
+  // which would show through a hidden parent. Clean view's exit button goes
+  // too: JARVIS switches clean view with its layout, and a click on it inside
+  // the dash panel would put GEV's chrome back in a box too small for it.
   const style = document.createElement('style');
   style.textContent =
-    '#title-bar, #style-indicator, .hud-top-right, .hud-bottom-right' +
-    ' { display: none !important; }';
+    '#title-bar, #style-indicator, .hud-top-right, .hud-bottom-right,' +
+    ' #clean-view-exit { display: none !important; }';
   document.head.appendChild(style);
 
   const post = (msg) => {
@@ -104,6 +139,13 @@ function startEmbedded(parentOrigin) {
       /* parent gone */
     }
   };
+
+  // Ask for the layout now that something is listening for it. JARVIS also
+  // sends it on the frame's load and whenever the link changes, but GEV only
+  // gets here after its own async startup, so either of those can land before
+  // the listener exists — and a lost message left the dash panel full of
+  // GEV's chrome.
+  post({ type: 'ready' });
 
   const onKey = (event) => {
     if (event.metaKey || event.ctrlKey || event.altKey || event.repeat) return;
@@ -144,6 +186,8 @@ function startEmbedded(parentOrigin) {
     window.removeEventListener('pointerdown', onActivity, true);
     window.removeEventListener('wheel', onActivity, { capture: true });
     style.remove();
+    guard.disconnect();
+    window.removeEventListener('message', onParent);
   };
 }
 
@@ -155,7 +199,7 @@ function startEmbedded(parentOrigin) {
  *   Resolves a JPEG data URL of a fresh frame, or null (hidden, black, too big).
  * @returns {() => void} stop
  */
-export function startJarvisLink({ runner, captureViewport }) {
+export function startJarvisLink({ runner, captureViewport, setPanelView }) {
   let socket = null;
   let retryMs = RETRY_MIN_MS;
   let retryTimer = null;
@@ -164,7 +208,9 @@ export function startJarvisLink({ runner, captureViewport }) {
   const parentOrigin = embeddingOrigin();
   // Embedded, JARVIS's own HUD shows the link state, so no chip.
   const chip = parentOrigin ? null : createChip();
-  const stopEmbedded = parentOrigin ? startEmbedded(parentOrigin) : null;
+  const stopEmbedded = parentOrigin
+    ? startEmbedded(parentOrigin, setPanelView)
+    : null;
 
   const send = (msg) => {
     if (socket?.readyState !== WebSocket.OPEN) return false;

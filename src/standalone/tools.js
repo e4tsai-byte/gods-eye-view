@@ -126,6 +126,12 @@ export function createStandaloneTools({
       startJarvisLink({
         runner: voiceCommands.runner,
         captureViewport: captureViewportImage,
+        // A panel on JARVIS's dashboard shows the bare globe; full screen
+        // brings GEV's own panels and HUD back.
+        setPanelView: (panel) => {
+          styleManager.setCleanView(panel);
+          styleManager.setHudVisible(panel ? 'off' : 'auto');
+        },
       }),
     );
   }
